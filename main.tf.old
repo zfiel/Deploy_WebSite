@@ -1,0 +1,214 @@
+#S3
+terraform{
+  backend "s3"{
+    # bucket="bucket-de-la-mort"
+    # key="Deploy_Infra/gg.tfstate"
+    # region="us-east-1"
+  }
+}
+
+#VARIABLES
+variable "env" {
+  type = string
+}
+
+variable "app_name" {
+  type = string
+}
+
+variable "app_cidr" {
+  type = string
+}
+
+variable "app_region" {
+  type = string
+}
+
+variable "app_port" {
+  type = string
+}
+
+variable "vpc_id" {
+  type = string
+}
+
+variable "public1_subnet_id" {
+  type = string
+}
+
+variable "public2_subnet_id" {
+  type = string
+}
+
+variable "public3_subnet_id" {
+  type = string
+}
+
+variable "private1_subnet_id" {
+  type = string
+}
+
+variable "private2_subnet_id" {
+  type = string
+}
+
+variable "private3_subnet_id" {
+  type = string
+}
+
+variable "image_id" {
+  type = string
+}
+
+#PROVIDER
+provider "aws" {
+  region  = "${var.app_region}"
+}
+
+#ELB_SG
+resource "aws_security_group" "elb" {
+  name = "${var.app_name}-${var.env}-elb-sg"
+  description = "elb"
+  vpc_id = "${var.vpc_id}"
+}
+
+resource "aws_security_group_rule" "elb-ingress" {
+  type = "ingress"
+  from_port = 80
+  to_port = 80
+  protocol = "tcp"
+  cidr_blocks = ["0.0.0.0/0"]
+  security_group_id = aws_security_group.elb.id
+}
+
+resource "aws_security_group_rule" "elb-egress" {
+  type = "egress"
+  from_port = 0
+  to_port = 0
+  protocol = "-1"
+  cidr_blocks = ["0.0.0.0/0"]
+  security_group_id = aws_security_group.elb.id
+}
+
+#ASG_SG
+resource "aws_security_group" "asg" {
+  name = "${var.app_name}-${var.env}-asg-sg"
+  description = "asg"
+  vpc_id = "${var.vpc_id}"
+}
+
+resource "aws_security_group_rule" "asg-ingress" {
+  type = "ingress"
+  from_port = "${var.app_port}"
+  to_port = "${var.app_port}"
+  protocol = "tcp"
+  source_security_group_id = "${aws_security_group.elb.id}"
+  security_group_id = aws_security_group.asg.id
+}
+
+resource "aws_security_group_rule" "asg-egress" {
+  type = "egress"
+  from_port = 0
+  to_port = 0
+  protocol = "-1"
+  cidr_blocks = ["0.0.0.0/0"]
+  security_group_id = aws_security_group.asg.id
+}
+
+#ASG
+resource "aws_launch_configuration" "as_conf" {
+  image_id = "${var.image_id}"
+  instance_type = "t2.micro"
+  security_groups = ["${aws_security_group.asg.id}"]
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_autoscaling_group" "main-asg" {
+  name = "${var.app_name}-${var.env}-asg"
+  launch_configuration = "${aws_launch_configuration.as_conf.name}"
+  min_size = 1
+  max_size = 3
+  load_balancers = ["${aws_elb.main-elb.name}"]
+  health_check_type = "ELB"
+  vpc_zone_identifier = ["${var.private1_subnet_id}","${var.private2_subnet_id}","${var.private3_subnet_id}"]
+  lifecycle {
+    create_before_destroy = true
+  }
+  tag {
+    key = "Name"
+    value = "${var.app_name}-${var.env}-app"
+    propagate_at_launch = true
+  }
+}
+
+#ELB
+resource "aws_elb" "main-elb" {
+  name = "${var.app_name}-${var.env}-elb"
+  security_groups = ["${aws_security_group.elb.id}"]
+  subnets = ["${var.public1_subnet_id}","${var.public2_subnet_id}","${var.public3_subnet_id}"]
+  health_check {
+    healthy_threshold = 2
+    unhealthy_threshold = 2
+    timeout = 5
+    interval = 30
+    target = "HTTP:${var.app_port}/"
+  }
+  listener {
+    lb_port = 80
+    lb_protocol = "http"
+    instance_port = "${var.app_port}"
+    instance_protocol = "http"
+  }
+}
+
+#AS_POLICIES
+resource "aws_autoscaling_policy" "scaleup-asp" {
+  name = "${var.app_name}-${var.env}-scaleup-asp"
+  scaling_adjustment = 1
+  adjustment_type = "ChangeInCapacity"
+  cooldown = 60
+  autoscaling_group_name = "${aws_autoscaling_group.main-asg.name}"
+}
+
+resource "aws_autoscaling_policy" "scaledown-asp" {
+  name = "${var.app_name}-${var.env}-scaledown-asp"
+  scaling_adjustment = -1
+  adjustment_type = "ChangeInCapacity"
+  cooldown = 60
+  autoscaling_group_name = "${aws_autoscaling_group.main-asg.name}"
+}
+
+#CLOUDWATCH
+resource "aws_cloudwatch_metric_alarm" "scaleup-cloudwatch" {
+  alarm_name = "${var.app_name}-${var.env}-scaleup-cloudwatch_alarm"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = "1"
+  metric_name = "CPUUtilization"
+  namespace = "AWS/EC2"
+  period = "60"
+  statistic = "Average"
+  threshold = "2"
+  dimensions = {
+    AutoScalingGroupName = "${aws_autoscaling_group.main-asg.name}"
+  }
+  alarm_description = "This metric monitors EC2 CPU utilization"
+  alarm_actions = ["${aws_autoscaling_policy.scaleup-asp.arn}"]
+}
+
+resource "aws_cloudwatch_metric_alarm" "scaledown-cloudwatch" {
+  alarm_name = "${var.app_name}-${var.env}-scaledown-cloudwatch_alarm"
+  comparison_operator = "LessThanOrEqualToThreshold"
+  evaluation_periods  = "1"
+  metric_name = "CPUUtilization"
+  namespace = "AWS/EC2"
+  period = "60"
+  statistic = "Average"
+  threshold = "1"
+  dimensions = {
+    AutoScalingGroupName = "${aws_autoscaling_group.main-asg.name}"
+  }
+  alarm_description = "This metric monitors EC2 CPU utilization"
+  alarm_actions = ["${aws_autoscaling_policy.scaledown-asp.arn}"]
+}

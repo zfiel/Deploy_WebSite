@@ -1,0 +1,125 @@
+properties([
+    parameters([
+        choice(choices: ['Deploy', 'Destroy'],description: '', name: 'WEBSITE'),
+        choice(choices: ['dev', 'preprod', 'prod'],description: '', name: 'ENV'),
+        string(defaultValue: 'WebApache', description: '', name: 'APP_NAME', trim: false),
+        string(defaultValue: 'eu-west-3', description: '', name: 'APP_REGION', trim: false),
+        string(defaultValue: '443', description: '', name: 'APP_PORT', trim: false)
+    ]),
+    disableConcurrentBuilds(),
+    buildDiscarder(logRotator(artifactDaysToKeepStr: '', artifactNumToKeepStr: '', daysToKeepStr: '1', numToKeepStr: '3'))
+])
+
+pipeline {
+    agent any
+    
+    environment {
+        GitBranch = "master"
+        def VPC_ID = sh(script: "aws ec2 describe-vpcs --filters 'Name=tag:Name,Values=${APP_NAME}-${ENV}-*' --region=${APP_REGION} | jq -r '.Vpcs[] | .VpcId'", returnStdout: true).trim()
+        def IMAGE_ID = sh(script: "aws ec2 describe-images --owners self --filters 'Name=name,Values=${APP_NAME}-${ENV}-AMI-*' --region=${APP_REGION} | jq -r '.Images[] | .ImageId'", returnStdout: true).trim()
+        def PUBLIC1_SUBNET_ID = sh(script: "aws ec2 describe-subnets --filters 'Name=tag:Name,Values=${APP_NAME}-${ENV}-public-1-*' --region=${APP_REGION} | jq -r '.Subnets[] | .SubnetId'", returnStdout: true).trim()
+        def PUBLIC2_SUBNET_ID = sh(script: "aws ec2 describe-subnets --filters 'Name=tag:Name,Values=${APP_NAME}-${ENV}-public-2-*' --region=${APP_REGION} | jq -r '.Subnets[] | .SubnetId'", returnStdout: true).trim()
+        def PUBLIC3_SUBNET_ID = sh(script: "aws ec2 describe-subnets --filters 'Name=tag:Name,Values=${APP_NAME}-${ENV}-public-3-*' --region=${APP_REGION} | jq -r '.Subnets[] | .SubnetId'", returnStdout: true).trim()
+        def PRIVATE1_SUBNET_ID = sh(script: "aws ec2 describe-subnets --filters 'Name=tag:Name,Values=${APP_NAME}-${ENV}-private-1-*' --region=${APP_REGION} | jq -r '.Subnets[] | .SubnetId'", returnStdout: true).trim()
+        def PRIVATE2_SUBNET_ID = sh(script: "aws ec2 describe-subnets --filters 'Name=tag:Name,Values=${APP_NAME}-${ENV}-private-2-*' --region=${APP_REGION} | jq -r '.Subnets[] | .SubnetId'", returnStdout: true).trim()
+        def PRIVATE3_SUBNET_ID = sh(script: "aws ec2 describe-subnets --filters 'Name=tag:Name,Values=${APP_NAME}-${ENV}-private-3-*' --region=${APP_REGION} | jq -r '.Subnets[] | .SubnetId'", returnStdout: true).trim()
+    }
+
+    stages {
+        stage('Check Vars') {
+            steps {
+                sh "echo check first if vars are compliant"
+		
+				sh "echo DEPLOY OR DESTROY: $WEBSITE"
+		        sh "echo VPC_ID: $VPC_ID"
+		        sh "echo IMAGE_ID: $IMAGE_ID"
+		        sh "echo PUBLIC1_SUBNET_ID: $PUBLIC1_SUBNET_ID"
+		        sh "echo PUBLIC2_SUBNET_ID: $PUBLIC2_SUBNET_ID"
+		        sh "echo PUBLIC3_SUBNET_ID: $PUBLIC3_SUBNET_ID"
+		        sh "echo PRIVATE1_SUBNET_ID: $PRIVATE1_SUBNET_ID"
+		        sh "echo PRIVATE2_SUBNET_ID: $PRIVATE2_SUBNET_ID"
+		        sh "echo PRIVATE3_SUBNET_ID: $PRIVATE3_SUBNET_ID"
+                sh "echo ENV: $ENV"
+                sh "echo APP_NAME: $APP_NAME"
+                sh "echo APP_REGION: $APP_REGION"
+                sh "echo APP_PORT: $APP_PORT"
+            }
+        }
+        
+        stage('Clean Jenkins Workspace') {
+            steps {
+                cleanWs()
+            }
+        }
+
+        stage('Checkout Git') {
+            steps {
+                dir("Deploy_WebSite") {
+                    git(
+                        url: 'https://github.com/Aunril/Deploy_WebSite.git',
+                        credentialsId: '1a1a1d03-9a1a-4db0-bfef-553f5921c54e',
+                        branch: "${GitBranch}"
+                    )
+                }
+            }
+        }
+
+        stage('Deploy WebSite') {
+            steps {
+                dir("Deploy_WebSite") {
+                    wrap([$class: 'AnsiColorBuildWrapper', 'colorMapName': 'xterm']) {
+                        sh "terraform init \
+                        -backend-config='bucket=tp-devops-yoann' \
+                        -backend-config='region=eu-west-3' \
+                        -backend-config='key=${APP_NAME}/${ENV}/Deploy_WebSite'"
+                        
+                        sh "terraform apply --auto-approve \
+                        -var env=$ENV \
+                        -var app_name=$APP_NAME \
+                        -var app_port=$APP_PORT \
+                        -var app_region=$APP_REGION \
+                        -var vpc_id='${VPC_ID}' \
+                        -var image_id='${IMAGE_ID}' \
+                        -var public1_subnet_id='${PUBLIC1_SUBNET_ID}' \
+                        -var public2_subnet_id='${PUBLIC2_SUBNET_ID}' \
+                        -var public3_subnet_id='${PUBLIC3_SUBNET_ID}' \
+                        -var private1_subnet_id='${PRIVATE1_SUBNET_ID}' \
+                        -var private2_subnet_id='${PRIVATE2_SUBNET_ID}' \
+                        -var private3_subnet_id='${PRIVATE3_SUBNET_ID}'"
+                    }
+                }
+            }
+        }
+        
+        stage('Destroy WebSite') {
+            when {
+                expression { params.WEBSITE == 'Destroy' }
+            }
+            steps {
+                dir("Deploy_WebSite") {
+                    wrap([$class: 'AnsiColorBuildWrapper', 'colorMapName': 'xterm']) {
+                        sh "terraform init \
+                        -backend-config='bucket=tp-devops-yoann' \
+                        -backend-config='region=eu-west-3' \
+                        -backend-config='key=${APP_NAME}/${ENV}/Deploy_WebSite'"
+                        
+                        sh "terraform destroy --auto-approve \
+                        -var env=$ENV \
+                        -var app_name=$APP_NAME \
+                        -var app_port=$APP_PORT \
+                        -var app_region=$APP_REGION \
+                        -var vpc_id='${VPC_ID}' \
+                        -var image_id='${IMAGE_ID}' \
+                        -var public1_subnet_id='${PUBLIC1_SUBNET_ID}' \
+                        -var public2_subnet_id='${PUBLIC2_SUBNET_ID}' \
+                        -var public3_subnet_id='${PUBLIC3_SUBNET_ID}' \
+                        -var private1_subnet_id='${PRIVATE1_SUBNET_ID}' \
+                        -var private2_subnet_id='${PRIVATE2_SUBNET_ID}' \
+                        -var private3_subnet_id='${PRIVATE3_SUBNET_ID}'"
+                    }
+                }
+            }
+        }
+
+    }
+}
