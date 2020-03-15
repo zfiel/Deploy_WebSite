@@ -1,23 +1,23 @@
 variable "app_name" {
-  type = "string"
+  type = string
 }
 
 variable "env" {
-  type = "string"
+  type = string
 }
 
 variable "private1_subnet_id" {
-  type = "string"
+  type = string
 }
 
 variable "private2_subnet_id" {
-  type = "string"
+  type = string
 }
 
 variable "private3_subnet_id" {
-  type = "string"
+  type = string
 }
 
 variable "asg_name" {
-  type = "string"
+  type = string
 }
