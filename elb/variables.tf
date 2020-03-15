@@ -1,31 +1,31 @@
 variable "vpc_id" {
-  type = "string"
+  type = string
 }
 
 variable "app_cidr" {
-  type = "string"
+  type = string
 }
 
 variable "app_name" {
-  type = "string"
+  type = string
 }
 
 variable "app_port" {
-  type = "string"
+  type = string
 }
 
 variable "env" {
-  type = "string"
+  type = string
 }
 
 variable "public1_subnet_id" {
-  type = "string"
+  type = string
 }
 
 variable "public2_subnet_id" {
-  type = "string"
+  type = string
 }
 
 variable "public3_subnet_id" {
-  type = "string"
+  type = string
 }
